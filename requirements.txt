@@ -1,0 +1,9 @@
+notebook
+-e git+https://github.com/AliShenasa/ImagingAnalysis.git@98dc65adeca517c8ec58d19a9f299825c2b7c103#egg=src
+matplotlib
+numpy
+pandas
+napari[all]
+opencv-python
+tifffile
+scanimage-tiff-reader
