@@ -1,0 +1,28 @@
+Outline for Glutimate Puffing presentation 2/17/23
+I will present on the analysis pipeline
+
+Note: Use trial(s) from kirsten Jan 19 data to walk through the pipeline
+	**When Giving examples, use only 1 ROI and 1 frame to keep things simple
+		Crop out 1 row of rawF and DF/F and compare it to florescence plot from fiji
+	
+Outline:
+
+How do we quantify a video of activity?
+
+Steps:
+
+Start with video
+draw rois
+Calculate raw florescence
+	for each frame and roi:
+		mask frame with roi
+		"convert" frame to grid of numbers
+		sum up the values as raw florescence for that roi for that frame
+Calculate DF/F
+	for each roi:
+		get the mean of the first 10 seconds of raw florescence (before puffing begins aka baseline activity)
+		divide raw florescence by baseline to get DF/F for that roi
+Plot values
+	Use a color map to convert from florescence values to colors
+	
+		

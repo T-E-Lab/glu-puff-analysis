@@ -9,6 +9,7 @@ import tkinter as tk
 from tkinter import filedialog
 import pickle
 import re
+import argparse
 
 import numpy as np
 import pandas as pd
@@ -26,6 +27,15 @@ from matplotlib import rcParams
 rcParams["pdf.fonttype"] = 42
 
 import imganlys.ImagingPreProc as iPP
+
+
+
+# parser = argparse.ArgumentParser()
+# parser.add_argument('--infile','-i', type=str, action='store', help='input file')
+# parser.add_argument('--outfile','-o', type=str, action='store', help='output file')
+# args = parser.parse_args()
+# infile = args.infile
+# outfile = args.outfile
 
 
 # In[2]:

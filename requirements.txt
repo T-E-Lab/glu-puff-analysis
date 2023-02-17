@@ -1,5 +1,5 @@
 notebook
--e git+https://github.com/T-E-Lab/ImagingAnalysis-clone.git@f818cf5dc811cc1581b44e2d223f947d51862101#egg=imganlys
+-e git+https://github.com/T-E-Lab/ImagingAnalysis-clone.git#egg=imganlys
 matplotlib
 numpy
 pandas
