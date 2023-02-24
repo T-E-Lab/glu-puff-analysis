@@ -464,5 +464,5 @@ for i, trial in enumerate(allDat.values()):
     plt.close(fig)
 
 
-print(f"file saved in {outfolder}")
+print(f"file(s) saved in {outfolder}")
 

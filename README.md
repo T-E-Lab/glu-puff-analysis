@@ -12,7 +12,7 @@
 
 * Setup anaconda environment with the following commands:
 
-```
+```bash
 conda create -n glupuff python=3.8 pip
 conda activate glupuff
 cd path/to/glu-puff-analysis
