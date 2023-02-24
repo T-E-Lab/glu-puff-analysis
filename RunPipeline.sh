@@ -1,10 +1,6 @@
 #!/bin/bash
 # RunPipeline.sh
 
-source conda activate glupuff
+source activate glupuff
 
-cd %~dp0
-
-source python GluPuff_Pipeline.py
-
-sleep
+python GluPuff_Pipeline.py
