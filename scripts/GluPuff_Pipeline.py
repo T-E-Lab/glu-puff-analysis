@@ -10,6 +10,7 @@ from tkinter import filedialog
 import pickle
 import re
 import argparse
+import os
 
 import numpy as np
 import pandas as pd
@@ -23,11 +24,12 @@ from matplotlib import transforms
 import matplotlib.patheffects as PathEffects
 import matplotlib
 from matplotlib import rcParams
-
-rcParams["pdf.fonttype"] = 42
+from showinfm import show_in_file_manager
 
 import imganlys.ImagingPreProc as iPP
 
+rcParams["pdf.fonttype"] = 42
+rcParams["svg.fonttype"] = "none"
 
 
 # parser = argparse.ArgumentParser()
@@ -38,92 +40,79 @@ import imganlys.ImagingPreProc as iPP
 # outfile = args.outfile
 
 
-# In[2]:
-
-
-def DFoFfromfirstfms(rawF, fm_interval):
-    """Calculate the DF/F given a raw fluorescence signal
-    The baseline fluorescence is the mean of first 10 seconds of florescence
-    Arguments:
-        rawF = raw fluorescence
-        fm_interval = frame interval aka time it takes to capture a frame
-    """
-
-    # Initialize the array to hold the DF/F data
-    DF = np.zeros(rawF.shape)
-
-    # rawF axes: [frames, rois]
-    baseline_sec = 10
-    baseline_end_frame = round(baseline_sec / fm_interval)
-
-    # Calculate the DF/F for each ROI
-    for r in range(0, rawF.shape[1]):
-        Fbaseline = rawF[0:baseline_end_frame, r].mean()
-        DF[:, r] = rawF[:, r] / Fbaseline - 1
-
-    return DF
-
-
 # # Get the trial info
 
 # In[3]:
+def load_trial_names():
+    """Prompt user to select trials
+
+    Returns:
+        list: list of filenames of trials
+    """
+
+    root = tk.Tk()
+    root.withdraw()
+    root.attributes("-topmost", 1)
+
+    trial_file_nms = filedialog.askopenfilenames()
+    return trial_file_nms
 
 
-### Load tiff files
 print("Select trials")
-
-root = tk.Tk()
-root.withdraw()
-root.attributes("-topmost", 1)
-
-trialfileNms = filedialog.askopenfilenames()
+trialfileNms = load_trial_names()
 print("files selected:")
 print(trialfileNms)
 
 # # Process the data!
-
-# In[4]:
-
-
-# fileNm = asksaveasfilename(title="Save Data as")
-
-
-# for expt in trials.keys():
-#     # os.path.join("C:", os.sep, "Users", "Ali Shenasa", "Lab", "VT48352", "20190211", "Fly2_3days_7fxVT48352")
-#     # '/Users/dante/Downloads/VT48352/20190211/Fly2_3days_7fxVT48352'
-#     if expt == os.path.join("C:", os.sep, "Users", "Ali Shenasa", "Lab", "VT48352", "20190211", "Fly2_3days_7fxVT48352"):
-#         continue
+PROC_DAT_FOLDER = os.path.join(os.getcwd(), "..", "results", "pickle")
 
 expt_dat = dict()
-for i, trial in enumerate(trialfileNms):
+for i, trialNm in enumerate(trialfileNms):
+    # Check if trial has been processed before
+    IS_PROCESSED = False
+    proc_data_fn = iPP.getPicklePath(PROC_DAT_FOLDER, trialNm)
+    if os.path.isfile(proc_data_fn):
+        IS_PROCESSED = True
+        print("This trial has been preprocessed, adding old ROI's")
+        with open(proc_data_fn, "rb") as infile:
+            oldDat = pickle.load(infile)
+
     # Load the stack
-    [stack, nCh, nDiscardFBFrames, fpv] = iPP.loadTif(trial)
+    [stack, nCh, nDiscardFBFrames, fpv] = iPP.loadTif(trialNm)
     # TODO: Use xarray to name stack dimensions
 
     # Get frame interval (time between frames)
-    with tf.TiffFile(trial) as tif:
+    with tf.TiffFile(trialNm) as tif:
         imagej_metadata = tif.imagej_metadata
         fm_interval = float(imagej_metadata.get("finterval"))
 
-    frameidx = 1  # index of stack shape with frames
-    ch = 0  # channel to be used
+    FRAMEIDX = 1  # index of stack shape with frames
+    CH = 0  # channel to be used
 
     # Select the first channel
     # Stack axes [Z?, frame, channel, X, Y]
-    stack = stack[:, :, ch : ch + 1, :, :]
+    stack = stack[:, :, CH : CH + 1, :, :]
 
     ### iPP.getROIs
     print(f"draw ROI's for image {i}")
-    mean_stack = stack.mean(
-        axis=1
-    )  # Axis 0 is of length one so it just returns the whole stack
+    mean_stack = np.squeeze(stack.mean(axis=1))  # Axis 0 is of length one so it just returns the whole stack
     # Load the mean image in napari
     viewer = napari.Viewer()
-    viewer.add_image(mean_stack)
-    if (i > 0) and (len(rois) > 0):
+    viewer.add_image(mean_stack, name=os.path.basename(trialNm),
+                     colormap="viridis",
+                     gamma=0.5)
+    if IS_PROCESSED:
+        # If processed add old rois
+        viewer.add_shapes(oldDat['rois'], shape_type="Polygon", name="Shapes",
+                          opacity=0.3)
+    elif (i > 0) and (len(rois) > 0):
+        # If not processed add rois from previous trial
         # TODO if is a new brain, remove the old rois
         #   If the dict for the date exists add the rois from that date to napari
-        viewer.add_shapes(rois, shape_type="Polygon", name="Shapes")
+        viewer.add_shapes(rois, shape_type="Polygon", name="Shapes",
+                          opacity=0.3)
+    else:
+        viewer.add_shapes(data=None, opacity=0.3)
     napari.run()
 
     # Use the ROIs that were drawn in napari to get image masks
@@ -137,11 +126,11 @@ for i, trial in enumerate(trialfileNms):
 
     ### iPP.FfromROIs
     # Initialize the array to hold the fluorescence data
-    rawF = np.zeros((stack.shape[frameidx], len(all_masks)))
+    rawF = np.zeros((stack.shape[FRAMEIDX], len(all_masks)))
 
     # Step through each frame in the stack
-    for fm in range(0, stack.shape[frameidx]):
-        fmNow = stack[0, fm, ch, :, :]
+    for fm in range(0, stack.shape[FRAMEIDX]):
+        fmNow = stack[0, fm, CH, :, :]
 
         # print(f"fmNow.shape: {fmNow.shape}")
         # print(f"all_masks.shape: {all_masks.shape}")
@@ -153,12 +142,12 @@ for i, trial in enumerate(trialfileNms):
     rawF_G = rawF
 
     # Get the DF/F
-    DF_G = DFoFfromfirstfms(rawF_G, fm_interval)
+    DF_G = iPP.DFoFfromfirstfms(rawF_G, fm_interval, baseline_sec=10)
 
     # Save the processed data
-    expt_dat[trial] = {
-        "trialName": trial,
-        "stack_mean_G": np.squeeze(mean_stack),
+    expt_dat[trialNm] = {
+        "trialName": trialNm,
+        "stack_mean_G": mean_stack,
         "rawF_G": rawF_G,
         "DF_G": DF_G,
         "all_masks": all_masks,
@@ -166,7 +155,7 @@ for i, trial in enumerate(trialfileNms):
         "fm_interval": fm_interval,
     }
 
-# iPP.saveDFDat(outfileNm, expt, expt_dat)
+iPP.saveTrials(PROC_DAT_FOLDER, expt_dat)
 
 
 # ### Load the data
@@ -217,15 +206,15 @@ def incr_bbox(bounding_box, scale_factor):
 
 def get_bbox(rois, scale_factor=1.5):
     """Given a list of rois, return a bounding box, a scale factor of 1 is a tight box"""
-    xcol = 2
-    ycol = 3
+    XCOL = 0
+    YCOL = 1
     # roi_bound axes: [roi, x or y, min or max]
     roi_bounds = np.empty(shape=(len(rois), 2, 2))
 
     # Get min and max for each roi x and y
-    for j, r in enumerate(rois):
-        roi_bounds[j][0][0], roi_bounds[j][1][0] = r.min(axis=0)[xcol : ycol + 1]
-        roi_bounds[j][0][1], roi_bounds[j][1][1] = r.max(axis=0)[xcol : ycol + 1]
+    for i, r in enumerate(rois):
+        roi_bounds[i][0][0], roi_bounds[i][1][0] = r.min(axis=0)[XCOL : YCOL + 1]
+        roi_bounds[i][0][1], roi_bounds[i][1][1] = r.max(axis=0)[XCOL : YCOL + 1]
 
     # Get the coords for the bounding box, using upper left corner to lower right
     # bounding_box axes: [x or y, min or max]
@@ -318,20 +307,17 @@ outfolder = filedialog.askdirectory()
 # In[12]:
 
 
-plt.rcParams["svg.fonttype"] = "none"
-
-
-for i, trial in enumerate(allDat.values()):
-    [xlength_DF, ylength_DF] = trial["DF_G"].shape
+for i, trialNm in enumerate(allDat.values()):
+    [xlength_DF, ylength_DF] = trialNm["DF_G"].shape
     # x and y limits of the roi
-    view_box = get_bbox(trial["rois"], scale_factor=1.5)
+    view_box = get_bbox(trialNm["rois"], scale_factor=1.5)
     xlength_ROI = abs(view_box[1][1] - view_box[1][0])
     ylength_ROI = abs(view_box[0][1] - view_box[0][0])
 
-    if trial["DF_G"].shape[0] > 1500:
+    if trialNm["DF_G"].shape[0] > 1500:
         aspect = 12
-    elif trial["DF_G"].shape[0] > 500:
-        aspect = int(0.008 * trial["DF_G"].shape[0])
+    elif trialNm["DF_G"].shape[0] > 500:
+        aspect = int(0.008 * trialNm["DF_G"].shape[0])
     else:
         aspect = 4
 
@@ -377,10 +363,10 @@ for i, trial in enumerate(allDat.values()):
     cmap = newcmp
 
     # Define limits and title/filename
-    DF_lims = [np.amin(trial["DF_G"]), np.amax(trial["DF_G"])]
-    rawF_lims = [np.amin(trial["rawF_G"]), np.amax(trial["rawF_G"])]
-    roi_num = trial["DF_G"].shape[1]
-    title = re.split(r"\\|/", trial["trialName"])[-1].split(".")[0]
+    DF_lims = [np.amin(trialNm["DF_G"]), np.amax(trialNm["DF_G"])]
+    rawF_lims = [np.amin(trialNm["rawF_G"]), np.amax(trialNm["rawF_G"])]
+    roi_num = trialNm["DF_G"].shape[1]
+    title = re.split(r"\\|/", trialNm["trialName"])[-1].split(".")[0]
 
     # Plot RawF with colorbar
     rawF_cbaraxes = [
@@ -390,13 +376,13 @@ for i, trial in enumerate(allDat.values()):
         panelMainHeight / figureHeight,
     ]
     plot_florescence(
-        trial["rawF_G"].T,
+        trialNm["rawF_G"].T,
         panel_rawF,
         cmap,
         aspect,
         rawF_lims,
         roi_num,
-        trial["fm_interval"],
+        trialNm["fm_interval"],
         withcbar=True,
         fig=fig,
         cbaraxes=rawF_cbaraxes,
@@ -414,13 +400,13 @@ for i, trial in enumerate(allDat.values()):
         panelMainHeight / figureHeight,
     ]
     plot_florescence(
-        trial["DF_G"].T,
+        trialNm["DF_G"].T,
         panel_DF,
         cmap,
         aspect,
         DF_lims,
         roi_num,
-        trial["fm_interval"],
+        trialNm["fm_interval"],
         withcbar=True,
         fig=fig,
         cbaraxes=DF_cbaraxes,
@@ -431,22 +417,22 @@ for i, trial in enumerate(allDat.values()):
     # arrowprops=dict(arrowstyle="<->", color='r'))
 
     # Plot ROI
-    panel_ROI.imshow(trial["stack_mean_G"])
+    panel_ROI.imshow(trialNm["stack_mean_G"])
     panel_ROI.axis("off")
-    for j, r in enumerate(trial["rois"]):
-        xidx = 2
-        yidx = 3
+    for j, r in enumerate(trialNm["rois"]):
+        X_IDX = 0
+        Y_IDX = 1
         panel_ROI.add_patch(
             Polygon(
-                [[pt[yidx], pt[xidx]] for pt in r],
+                [[pt[Y_IDX], pt[X_IDX]] for pt in r],
                 closed=True,
                 fill=False,
                 edgecolor=(1, 1, 1, 0.5),
             )
         )
         panel_ROI.text(
-            r[:, yidx].mean(),
-            r[:, xidx].mean(),
+            r[:, Y_IDX].mean(),
+            r[:, X_IDX].mean(),
             str(j + 1),
             dict(ha="center", va="center", fontsize=5, color="w"),
         )
@@ -465,4 +451,4 @@ for i, trial in enumerate(allDat.values()):
 
 
 print(f"file(s) saved in {outfolder}")
-
+show_in_file_manager(outfolder)
