@@ -451,4 +451,7 @@ for i, trialNm in enumerate(allDat.values()):
 
 
 print(f"file(s) saved in {outfolder}")
+
+if os.name == 'nt':
+    outfolder = outfolder.replace('/', '\\')
 show_in_file_manager(outfolder)
