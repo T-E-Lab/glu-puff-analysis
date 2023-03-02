@@ -24,6 +24,7 @@ from matplotlib import transforms
 import matplotlib.patheffects as PathEffects
 import matplotlib
 from matplotlib import rcParams
+from tqdm import tqdm
 from showinfm import show_in_file_manager
 
 import imganlys.ImagingPreProc as iPP
@@ -41,25 +42,8 @@ rcParams["svg.fonttype"] = "none"
 
 
 # # Get the trial info
-
-# In[3]:
-def load_trial_names():
-    """Prompt user to select trials
-
-    Returns:
-        list: list of filenames of trials
-    """
-
-    root = tk.Tk()
-    root.withdraw()
-    root.attributes("-topmost", 1)
-
-    trial_file_nms = filedialog.askopenfilenames()
-    return trial_file_nms
-
-
 print("Select trials")
-trialfileNms = load_trial_names()
+trialfileNms = iPP.loadFileNames()
 print("files selected:")
 print(trialfileNms)
 
@@ -124,22 +108,8 @@ for i, trialNm in enumerate(trialfileNms):
     shape_y = stack.shape[4]
     all_masks = viewer.layers["Shapes"].to_masks(mask_shape=(shape_x, shape_y))
 
-    ### iPP.FfromROIs
-    # Initialize the array to hold the fluorescence data
-    rawF = np.zeros((stack.shape[FRAMEIDX], len(all_masks)))
-
-    # Step through each frame in the stack
-    for fm in range(0, stack.shape[FRAMEIDX]):
-        fmNow = stack[0, fm, CH, :, :]
-
-        # print(f"fmNow.shape: {fmNow.shape}")
-        # print(f"all_masks.shape: {all_masks.shape}")
-
-        # Find the sum of the fluorescence in each ROI for the given frame
-        for r in range(0, len(all_masks)):
-            rawF[fm, r] = np.multiply(fmNow, all_masks[r]).sum()
-
-    rawF_G = rawF
+    # Get the rawF
+    rawF_G = iPP.FfromROIs(stack, all_masks, frameIdx=FRAMEIDX, ch=CH)
 
     # Get the DF/F
     DF_G = iPP.DFoFfromfirstfms(rawF_G, fm_interval, baseline_sec=10)
@@ -182,122 +152,8 @@ from matplotlib.colors import ListedColormap, LinearSegmentedColormap
 # newcmp = ListedColormap(newcolors, name='RedGreen')
 newcmp = "PiYG"
 
-# In[7]:
-
-
-def incr_bbox(bounding_box, scale_factor):
-    """Given a scale factor and an nparray with shape (2,2): [x or y, min or max]
-    Return a scaled bbox centered at the same spot"""
-    view_box = np.empty(shape=(2, 2))
-    for dim in range(2):
-        for lim in range(2):
-            if lim == 0:  # min
-                sign = -1
-            if lim == 1:  # max
-                sign = 1
-            length = bounding_box[dim, 1] - bounding_box[dim, 0]
-            scale_amount = sign * (scale_factor - 1) / 2 * length
-            view_box[dim, lim] = bounding_box[dim, lim] + scale_amount
-    return view_box
-
-
-# In[8]:
-
-
-def get_bbox(rois, scale_factor=1.5):
-    """Given a list of rois, return a bounding box, a scale factor of 1 is a tight box"""
-    XCOL = 0
-    YCOL = 1
-    # roi_bound axes: [roi, x or y, min or max]
-    roi_bounds = np.empty(shape=(len(rois), 2, 2))
-
-    # Get min and max for each roi x and y
-    for i, r in enumerate(rois):
-        roi_bounds[i][0][0], roi_bounds[i][1][0] = r.min(axis=0)[XCOL : YCOL + 1]
-        roi_bounds[i][0][1], roi_bounds[i][1][1] = r.max(axis=0)[XCOL : YCOL + 1]
-
-    # Get the coords for the bounding box, using upper left corner to lower right
-    # bounding_box axes: [x or y, min or max]
-    bounding_box = np.empty(shape=(2, 2))
-    bounding_box[:, 0] = roi_bounds[:, :, 0].min(axis=0)
-    bounding_box[:, 1] = roi_bounds[:, :, 1].max(axis=0)
-
-    # Create a larger bounding box to not cut off parts of the PB
-    view_box = incr_bbox(bounding_box, scale_factor)
-    return view_box
-
-
-# In[9]:
-
-
-def plot_colorbar(fig, cbaraxes, F_plot, F_lims, cbarlabel):
-    """Plot the colorbar for the given F_plot"""
-    # Plot colorbar
-    cbar_ax = fig.add_axes(cbaraxes)
-    cbar = fig.colorbar(F_plot, cax=cbar_ax)
-    cbar.set_ticks(F_lims)
-    if (F_lims[0] > 10**2) or (F_lims[1] > 10**2):
-        F_lims_str = [f"{lim:g}" for lim in F_lims]
-    else:
-        F_lims_str = [f"{lim:.2f}" for lim in F_lims]
-    cbar.ax.set_yticklabels(F_lims_str)
-    cbar.set_label(cbarlabel, labelpad=-25)
-
-
-# In[10]:
-
-
-def plot_florescence(
-    F,
-    panel,
-    cmap,
-    aspect,
-    F_lims,
-    roi_num,
-    fm_interval,
-    withcbar=False,
-    fig=None,
-    cbaraxes=None,
-    cbarlabel=None,
-):
-    """Plot the florescence of F
-    if with cbar is true, need to provide fig, and axes of cbar"""
-    # Plot florescence
-    F_plot = panel.imshow(
-        F,
-        cmap=cmap,
-        interpolation="nearest",
-        aspect=aspect,
-        vmin=F_lims[0],
-        vmax=F_lims[1],
-    )
-    # panel.title.set_text(title)
-    num_frames = F.shape[1]
-    ticks = [
-        int(sec / fm_interval) for sec in np.arange(0, num_frames * fm_interval, 10)
-    ]
-    panel.set_xlabel("sec", labelpad=0)
-    panel.set_xticks(
-        [int(sec / fm_interval) for sec in np.arange(0, num_frames * fm_interval, 5)],
-        [
-            f"{sec:.0f}" if sec % 2 == 0 else ""
-            for sec in np.arange(0, num_frames * fm_interval, 5)
-        ],
-    )
-    panel.set_ylabel("ROI", labelpad=-2)
-    panel.set_yticks(
-        [i for i in range(roi_num) if i % 2 == 0],
-        [i + 1 for i in range(roi_num) if i % 2 == 0],
-    )
-    # Plot colorbar
-    if withcbar:
-        plot_colorbar(fig, cbaraxes, F_plot, F_lims, cbarlabel)
-
-
-# Note: Plotting fails if trial is too long, maximum length is 18 minutes
 
 # In[11]:
-
 
 ### Get folder to save plots in
 print("Select output folder")
@@ -307,17 +163,17 @@ outfolder = filedialog.askdirectory()
 # In[12]:
 
 
-for i, trialNm in enumerate(allDat.values()):
-    [xlength_DF, ylength_DF] = trialNm["DF_G"].shape
+for i, (trial_nm, trial) in tqdm(enumerate(allDat.items()), total=len(allDat)):
+    [xlength_DF, ylength_DF] = trial["DF_G"].shape
     # x and y limits of the roi
-    view_box = get_bbox(trialNm["rois"], scale_factor=1.5)
+    view_box = iPP.get_bbox(trial["rois"], scale_factor=1.5)
     xlength_ROI = abs(view_box[1][1] - view_box[1][0])
     ylength_ROI = abs(view_box[0][1] - view_box[0][0])
 
-    if trialNm["DF_G"].shape[0] > 1500:
+    if trial["DF_G"].shape[0] > 1500:
         aspect = 12
-    elif trialNm["DF_G"].shape[0] > 500:
-        aspect = int(0.008 * trialNm["DF_G"].shape[0])
+    elif trial["DF_G"].shape[0] > 500:
+        aspect = int(0.008 * trial["DF_G"].shape[0])
     else:
         aspect = 4
 
@@ -363,10 +219,10 @@ for i, trialNm in enumerate(allDat.values()):
     cmap = newcmp
 
     # Define limits and title/filename
-    DF_lims = [np.amin(trialNm["DF_G"]), np.amax(trialNm["DF_G"])]
-    rawF_lims = [np.amin(trialNm["rawF_G"]), np.amax(trialNm["rawF_G"])]
-    roi_num = trialNm["DF_G"].shape[1]
-    title = re.split(r"\\|/", trialNm["trialName"])[-1].split(".")[0]
+    DF_lims = [np.amin(trial["DF_G"]), np.amax(trial["DF_G"])]
+    rawF_lims = [np.amin(trial["rawF_G"]), np.amax(trial["rawF_G"])]
+    roi_num = trial["DF_G"].shape[1]
+    title = os.path.basename(trial_nm).split(".")[0]
 
     # Plot RawF with colorbar
     rawF_cbaraxes = [
@@ -375,14 +231,14 @@ for i, trialNm in enumerate(allDat.values()):
         cbarWidth / figureWidth,
         panelMainHeight / figureHeight,
     ]
-    plot_florescence(
-        trialNm["rawF_G"].T,
+    iPP.plot_florescence(
+        trial["rawF_G"].T,
         panel_rawF,
         cmap,
         aspect,
         rawF_lims,
         roi_num,
-        trialNm["fm_interval"],
+        trial["fm_interval"],
         withcbar=True,
         fig=fig,
         cbaraxes=rawF_cbaraxes,
@@ -399,14 +255,14 @@ for i, trialNm in enumerate(allDat.values()):
         cbarWidth / figureWidth,
         panelMainHeight / figureHeight,
     ]
-    plot_florescence(
-        trialNm["DF_G"].T,
+    iPP.plot_florescence(
+        trial["DF_G"].T,
         panel_DF,
         cmap,
         aspect,
         DF_lims,
         roi_num,
-        trialNm["fm_interval"],
+        trial["fm_interval"],
         withcbar=True,
         fig=fig,
         cbaraxes=DF_cbaraxes,
@@ -417,9 +273,9 @@ for i, trialNm in enumerate(allDat.values()):
     # arrowprops=dict(arrowstyle="<->", color='r'))
 
     # Plot ROI
-    panel_ROI.imshow(trialNm["stack_mean_G"])
+    panel_ROI.imshow(trial["stack_mean_G"])
     panel_ROI.axis("off")
-    for j, r in enumerate(trialNm["rois"]):
+    for j, r in enumerate(trial["rois"]):
         X_IDX = 0
         Y_IDX = 1
         panel_ROI.add_patch(

@@ -8,3 +8,4 @@ opencv-python
 tifffile
 scanimage-tiff-reader
 show-in-file-manager
+tqdm
