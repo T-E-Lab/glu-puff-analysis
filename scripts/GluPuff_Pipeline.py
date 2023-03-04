@@ -5,70 +5,64 @@
 
 # In[1]:
 
-import tkinter as tk
 from tkinter import filedialog
 import pickle
-import re
 import argparse
 import os
 
 import numpy as np
-import pandas as pd
 import tifffile as tf
 import napari
-import cv2 as cv
 
 from matplotlib import pyplot as plt
 from matplotlib.patches import Polygon
-from matplotlib import transforms
-import matplotlib.patheffects as PathEffects
-import matplotlib
+from matplotlib.colors import TwoSlopeNorm
 from matplotlib import rcParams
 from tqdm import tqdm
 from showinfm import show_in_file_manager
 
 import imganlys.ImagingPreProc as iPP
 
-rcParams["pdf.fonttype"] = 42
-rcParams["svg.fonttype"] = "none"
+rcParams['pdf.fonttype'] = 42
+rcParams['svg.fonttype'] = "none"
 
+def parse_args():
+    # TODO Implement cmdline arguments for where to save plots, whether to include rawF and or roi plot
+    parser = argparse.ArgumentParser()
+    # parser.add_argument('--infile','-i', type=str, action='store', help='input file')
+    # parser.add_argument('--outfile','-o', type=str, action='store', help='output file')
+    parser.add_argument('--skip','-s', action='store_true', dest='skip_proc', default=False, help='output file')
+    args = parser.parse_args()
+    return args
+    # infile = args.infile
+    # outfile = args.outfile
 
-# parser = argparse.ArgumentParser()
-# parser.add_argument('--infile','-i', type=str, action='store', help='input file')
-# parser.add_argument('--outfile','-o', type=str, action='store', help='output file')
-# args = parser.parse_args()
-# infile = args.infile
-# outfile = args.outfile
+def process_trial(trial_nm, proc_dat_folder, prev_rois=None):
+    """Process a glutimate puffing trial
 
+    Args:
+        trial_nm (str): path to trial
+        proc_dat_folder (str): path to folder to store processed data
 
-# # Get the trial info
-print("Select trials")
-trialfileNms = iPP.loadFileNames()
-print("files selected:")
-print(trialfileNms)
-
-# # Process the data!
-PROC_DAT_FOLDER = os.path.join(os.getcwd(), "..", "results", "pickle")
-
-expt_dat = dict()
-for i, trialNm in enumerate(trialfileNms):
+    Returns:
+        dict: dictionary of trial data
+    """
     # Check if trial has been processed before
     IS_PROCESSED = False
-    proc_data_fn = iPP.getPicklePath(PROC_DAT_FOLDER, trialNm)
+    proc_data_fn = iPP.getPicklePath(trial_nm, proc_dat_folder)
     if os.path.isfile(proc_data_fn):
         IS_PROCESSED = True
         print("This trial has been preprocessed, adding old ROI's")
-        with open(proc_data_fn, "rb") as infile:
-            oldDat = pickle.load(infile)
+        oldDat = iPP.loadProcData(proc_data_fn)
 
     # Load the stack
-    [stack, nCh, nDiscardFBFrames, fpv] = iPP.loadTif(trialNm)
+    [stack, nCh, nDiscardFBFrames, fpv] = iPP.loadTif(trial_nm)
     # TODO: Use xarray to name stack dimensions
 
     # Get frame interval (time between frames)
-    with tf.TiffFile(trialNm) as tif:
+    with tf.TiffFile(trial_nm) as tif:
         imagej_metadata = tif.imagej_metadata
-        fm_interval = float(imagej_metadata.get("finterval"))
+        fm_interval = float(imagej_metadata.get('finterval'))
 
     FRAMEIDX = 1  # index of stack shape with frames
     CH = 0  # channel to be used
@@ -78,22 +72,21 @@ for i, trialNm in enumerate(trialfileNms):
     stack = stack[:, :, CH : CH + 1, :, :]
 
     ### iPP.getROIs
-    print(f"draw ROI's for image {i}")
     mean_stack = np.squeeze(stack.mean(axis=1))  # Axis 0 is of length one so it just returns the whole stack
     # Load the mean image in napari
     viewer = napari.Viewer()
-    viewer.add_image(mean_stack, name=os.path.basename(trialNm),
-                     colormap="viridis",
+    viewer.add_image(mean_stack, name=os.path.basename(trial_nm),
+                     colormap='viridis',
                      gamma=0.5)
     if IS_PROCESSED:
         # If processed add old rois
-        viewer.add_shapes(oldDat['rois'], shape_type="Polygon", name="Shapes",
+        viewer.add_shapes(oldDat['rois'], shape_type='Polygon', name="Shapes",
                           opacity=0.3)
-    elif (i > 0) and (len(rois) > 0):
+    elif prev_rois is not None:
         # If not processed add rois from previous trial
         # TODO if is a new brain, remove the old rois
         #   If the dict for the date exists add the rois from that date to napari
-        viewer.add_shapes(rois, shape_type="Polygon", name="Shapes",
+        viewer.add_shapes(prev_rois, shape_type='Polygon', name="Shapes",
                           opacity=0.3)
     else:
         viewer.add_shapes(data=None, opacity=0.3)
@@ -109,71 +102,45 @@ for i, trialNm in enumerate(trialfileNms):
     all_masks = viewer.layers["Shapes"].to_masks(mask_shape=(shape_x, shape_y))
 
     # Get the rawF
-    rawF_G = iPP.FfromROIs(stack, all_masks, frameIdx=FRAMEIDX, ch=CH)
+    raw_flor = iPP.FfromROIs(stack, all_masks, frameIdx=FRAMEIDX, ch=CH)
 
     # Get the DF/F
-    DF_G = iPP.DFoFfromfirstfms(rawF_G, fm_interval, baseline_sec=10)
+    delta_flor = iPP.DFoFfromfirstfms(raw_flor, fm_interval, baseline_sec=10)
 
     # Save the processed data
-    expt_dat[trialNm] = {
-        "trialName": trialNm,
-        "stack_mean_G": mean_stack,
-        "rawF_G": rawF_G,
-        "DF_G": DF_G,
+    trial_data = {
+        "trial_nm": trial_nm,
+        "stack_mean": mean_stack,
+        "raw_flor": raw_flor,
+        "delta_flor": delta_flor,
         "all_masks": all_masks,
         "rois": rois,
         "fm_interval": fm_interval,
     }
+    return trial_data
 
-iPP.saveTrials(PROC_DAT_FOLDER, expt_dat)
+def plot_trial(trial_dat, outfolder, cmap='PiYG'):
+    """_summary_
 
-
-# ### Load the data
-
-# In[5]:
-
-
-allDat = expt_dat
-
-
-# ### Plot the Red and Green DF/F
-
-# In[6]:
-
-
-from matplotlib import cm
-from matplotlib.colors import ListedColormap, LinearSegmentedColormap
-
-# top = cm.get_cmap('Reds_r', 128)
-# bottom = cm.get_cmap('Greens', 128)
-
-# newcolors = np.vstack((top(np.linspace(0, 1, 128)),
-#                        bottom(np.linspace(0, 1, 128))))
-# newcmp = ListedColormap(newcolors, name='RedGreen')
-newcmp = "PiYG"
-
-
-# In[11]:
-
-### Get folder to save plots in
-print("Select output folder")
-outfolder = filedialog.askdirectory()
-
-
-# In[12]:
-
-
-for i, (trial_nm, trial) in tqdm(enumerate(allDat.items()), total=len(allDat)):
-    [xlength_DF, ylength_DF] = trial["DF_G"].shape
+    Args:
+        trial_dat (dict): dictionary of trial data
+        outfolder (str): path to folder to store plots
+        cmap (str, optional): colormap to use. Defaults to 'PiYG'.
+    """
+    # Get raw and delta florescence
+    raw_flor = trial_dat.get('raw_flor', trial_dat.get('rawF_G'))
+    delta_flor = trial_dat.get('delta_flor', trial_dat.get('DF_G'))
+    
+    [xlength_DF, ylength_DF] = delta_flor.shape
     # x and y limits of the roi
-    view_box = iPP.get_bbox(trial["rois"], scale_factor=1.5)
+    view_box = iPP.get_bbox(trial_dat['rois'], scale_factor=1.5)
     xlength_ROI = abs(view_box[1][1] - view_box[1][0])
     ylength_ROI = abs(view_box[0][1] - view_box[0][0])
 
-    if trial["DF_G"].shape[0] > 1500:
+    if delta_flor.shape[0] > 1500:
         aspect = 12
-    elif trial["DF_G"].shape[0] > 500:
-        aspect = int(0.008 * trial["DF_G"].shape[0])
+    elif delta_flor.shape[0] > 500:
+        aspect = int(0.008 * delta_flor.shape[0])
     else:
         aspect = 4
 
@@ -208,74 +175,61 @@ for i, (trial_nm, trial) in tqdm(enumerate(allDat.items()), total=len(allDat)):
     # Create figure
     fig = plt.figure(figsize=(figureWidth, figureHeight))
     panel_DF = plt.axes(
-        [main_x, DF_y, panelMainWidth / figureWidth, panelMainHeight / figureHeight]
-    )
+        [main_x, DF_y,
+         panelMainWidth / figureWidth,
+         panelMainHeight / figureHeight]
+        )
     panel_rawF = plt.axes(
-        [main_x, rawF_y, panelMainWidth / figureWidth, panelMainHeight / figureHeight]
-    )
+        [main_x, rawF_y,
+         panelMainWidth / figureWidth,
+         panelMainHeight / figureHeight]
+        )
     panel_ROI = plt.axes(
-        [roi_x, DF_y, panelROIWidth / figureWidth, panelROIHeight / figureHeight]
-    )
-    cmap = newcmp
+        [roi_x, DF_y,
+         panelROIWidth / figureWidth,
+         panelROIHeight / figureHeight]
+        )
 
     # Define limits and title/filename
-    DF_lims = [np.amin(trial["DF_G"]), np.amax(trial["DF_G"])]
-    rawF_lims = [np.amin(trial["rawF_G"]), np.amax(trial["rawF_G"])]
-    roi_num = trial["DF_G"].shape[1]
-    title = os.path.basename(trial_nm).split(".")[0]
+    DF_lims = [np.amin(delta_flor), np.amax(delta_flor)]
+    rawF_lims = [np.amin(raw_flor), np.amax(raw_flor)]
+    roi_num = delta_flor.shape[1]
+    trial_nm = trial_dat.get('trial_nm', trial_dat.get('trialName'))
+    title = os.path.basename(trial_nm).split('.')[0]
 
     # Plot RawF with colorbar
     rawF_cbaraxes = [
-        cbar_x,
-        rawF_y,
+        cbar_x, rawF_y,
         cbarWidth / figureWidth,
         panelMainHeight / figureHeight,
     ]
     iPP.plot_florescence(
-        trial["rawF_G"].T,
-        panel_rawF,
-        cmap,
-        aspect,
-        rawF_lims,
-        roi_num,
-        trial["fm_interval"],
-        withcbar=True,
-        fig=fig,
-        cbaraxes=rawF_cbaraxes,
-        cbarlabel="rawF",
-    )
+        raw_flor.T, panel_rawF, cmap, aspect, roi_num, trial_dat['fm_interval'], rawF_lims,
+        withcbar=True, fig=fig, cbaraxes=rawF_cbaraxes, cbarlabel="rawF",
+        )
 
     # panel_ROI.annotate('', xy=(main_x, rawF_y), xycoords='figure fraction', xytext=(main_x+(panelMainWidth/figureWidth), rawF_y+(panelMainHeight)/figureHeight),
     # arrowprops=dict(arrowstyle="<->", color='r'))
 
     # Plot DF/F
     DF_cbaraxes = [
-        cbar_x,
-        DF_y,
+        cbar_x, DF_y,
         cbarWidth / figureWidth,
         panelMainHeight / figureHeight,
     ]
+    DF_divnorm = TwoSlopeNorm(vmin=DF_lims[0], vcenter=0., vmax=DF_lims[1])
     iPP.plot_florescence(
-        trial["DF_G"].T,
-        panel_DF,
-        cmap,
-        aspect,
-        DF_lims,
-        roi_num,
-        trial["fm_interval"],
-        withcbar=True,
-        fig=fig,
-        cbaraxes=DF_cbaraxes,
-        cbarlabel="DF/F",
-    )
+        delta_flor.T, panel_DF, cmap, aspect, roi_num,trial_dat['fm_interval'], DF_lims, DF_divnorm,
+        withcbar=True, fig=fig, cbaraxes=DF_cbaraxes, cbarlabel="DF/F",
+        )
 
     # panel_ROI.annotate('', xy=(main_x, DF_y), xycoords='figure fraction', xytext=(main_x+(panelMainWidth/figureWidth), DF_y+(panelMainHeight)/figureHeight),
     # arrowprops=dict(arrowstyle="<->", color='r'))
 
     # Plot ROI
-    panel_ROI.imshow(trial["stack_mean_G"])
-    panel_ROI.axis("off")
-    for j, r in enumerate(trial["rois"]):
+    panel_ROI.imshow(trial_dat['stack_mean'])
+    panel_ROI.axis('off')
+    for j, r in enumerate(trial_dat['rois']):
         X_IDX = 0
         Y_IDX = 1
         panel_ROI.add_patch(
@@ -290,7 +244,7 @@ for i, (trial_nm, trial) in tqdm(enumerate(allDat.items()), total=len(allDat)):
             r[:, Y_IDX].mean(),
             r[:, X_IDX].mean(),
             str(j + 1),
-            dict(ha="center", va="center", fontsize=5, color="w"),
+            dict(ha='center', va='center', fontsize=5, color='w'),
         )
 
     panel_ROI.set_xlim(view_box[1])
@@ -300,14 +254,61 @@ for i, (trial_nm, trial) in tqdm(enumerate(allDat.items()), total=len(allDat)):
     # panel_ROI.annotate('', xy=(roi_x, DF_y), xycoords='figure fraction', xytext=(roi_x+(panelROIWidth/figureWidth), DF_y+(panelROIHeight)/figureHeight),
     # arrowprops=dict(arrowstyle="<->", color='r'))
 
-    fig.text(title_x, title_y, title, fontsize=15, va="center", ha="center")
+    fig.text(title_x, title_y, title, fontsize=15, va='center', ha='center')
 
-    fig.savefig(outfolder + "/" + title + ".png", dpi=600)
+    out_path = os.path.join(outfolder, title + ".png")
+    fig.savefig(out_path, dpi=600)
     plt.close(fig)
 
 
-print(f"file(s) saved in {outfolder}")
 
-if os.name == 'nt':
-    outfolder = outfolder.replace('/', '\\')
-show_in_file_manager(outfolder)
+if __name__ == "__main__":
+    args = parse_args()
+
+    # Get the trial info
+    print("Select trials")
+    trialfileNms = iPP.loadFileNames()
+    print("files selected:")
+    print(trialfileNms)
+
+    # Process the data!
+    PROC_DAT_FOLDER = os.path.join(os.getcwd(), "..", "results", "pickle")
+
+    expt_dat = {}
+    prev_rois = None
+    for i, trial_nm in enumerate(trialfileNms):
+        # Check if trial has been processed before
+        IS_PROCESSED = False
+        proc_data_fn = iPP.getPicklePath(trial_nm, PROC_DAT_FOLDER)
+        if args.skip_proc and os.path.isfile(proc_data_fn):
+            IS_PROCESSED = True
+            trial_dat = iPP.loadProcData(proc_data_fn)
+
+        else:
+            print(f"draw ROI's for image {i+1}")
+            trial_dat = process_trial(trial_nm, PROC_DAT_FOLDER, prev_rois)
+
+            # Save rois for next processing
+            prev_rois = trial_dat['rois']
+            
+            # Save trial after each one is processed 
+            trial_dict = {trial_nm: trial_dat}
+            iPP.saveTrials(trial_dict, PROC_DAT_FOLDER)
+
+        # Store trial in dictionary for plotting
+        expt_dat[trial_nm] = trial_dat
+
+
+    # Get folder to save plots in
+    print("Select output folder")
+    outfolder = filedialog.askdirectory()
+
+    for i, trial_dat in tqdm(enumerate(expt_dat.values()), total=len(expt_dat)):
+        plot_trial(trial_dat, outfolder, cmap='PiYG')
+
+
+    print(f"file(s) saved in {outfolder}")
+
+    if os.name == 'nt':
+        outfolder = outfolder.replace('/', '\\')
+    show_in_file_manager(outfolder)
